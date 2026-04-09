@@ -9,220 +9,155 @@
 
 ---
 
-## Overview
+## Selected Topic
 
-This project extends the **PeachOS** custom kernel by implementing a terminal-based task management application that runs entirely within the OS's program space. Users can create, view, delete, and persist task lists — all secured by a lightweight, reversible XOR-based encryption scheme.
+**To-do List OS**
 
-The application interfaces directly with the kernel through system calls, interrupts, and process management to access system resources. The centerpiece feature is **secure persistence**: tasks are saved to disk in encrypted form using XOR encoding with a user-provided key. When the system boots and a saved file is loaded, the task list is decrypted and reconstructed in memory.
+## Detailed Project Description
 
----
+This project extends the custom kernel by implementing a terminal-based task management application that runs within the OS environment. The user is able to create, access, delete, and save task lists while using a lightweight reversible encryption system to store tasks securely.
 
-## Features
+The application runs entirely within the program space of the kernel, using system calls, interrupts, and processes to interface with system resources.
 
-- Add, list, and remove tasks via a command-line interface
-- In-memory task management using a dynamic data structure (array or linked list)
-- Each task tracks: **ID**, **Description**, and **Status** (complete / incomplete)
-- Save tasks to disk with **XOR encryption** using a user-provided key
-- Load and decrypt tasks from disk back into memory
-- Runs entirely in user-space on the PeachOS kernel — no standard library required
-- Process isolation via `fork()` — application runs as a child process of the shell
+The main feature of this system is secure persistence. The task lists are stored on disk using XOR-based reversible encryption, which prevents the encoded data from being read without the correct key. When the system is booted and a file is loaded, the task list is decrypted and loaded back into memory.
 
 ---
 
-## Command Interface
+## Kernel Folder Layout
 
-| Command | Description |
-|---|---|
-| `add <task>` | Adds a new task to the in-memory list |
-| `list` | Displays all tasks with their ID and status |
-| `remove <id>` | Deletes a task by its unique ID |
-| `save <filename>` | Encrypts and writes the task list to disk |
-| `load <filename>` | Reads and decrypts a task list from disk |
+This is how the project is organized in the kernel folder, specifically under the `programs` directory:
+
+```text
+PeachOS/
+└── programs/
+   └── todo/
+      ├── main.c
+      ├── todo.c
+      ├── todo.h
+      ├── syscall.c
+      ├── encrypt.c
+      ├── disk.c
+      ├── disk.h
+      └── Makefile
+```
 
 ---
 
-## Application Operation — Step by Step
+## Detailed Steps of the Application Operations
 
 ### 1. System Startup
+
 - The kernel boots and initializes memory, paging, and process structures.
 - The to-do application is loaded from the `/programs` directory.
 
-### 2. User Interface
-- The user interacts through a single terminal command-line interface.
-- Keyboard input is processed via the keyboard interrupt handler (see [Interrupt Operation](#interrupt-operation)).
+### 2. User Interface (Terminal-Based)
+
+The user interacts through a single command-line interface:
+
+- `add <task>` -> adds a new task
+- `list` -> displays all tasks
+- `remove <id>` -> deletes a task
+- `save <filename>` -> saves tasks to disk
+- `load <filename>` -> loads tasks from disk
 
 ### 3. Task Management (In-Memory)
-- Tasks are stored in a dynamic in-memory structure.
-- Each task contains: a unique **ID**, a **description** string, and a **status** flag.
+
+- Tasks are stored in a dynamic in-memory structure, such as an array or linked list.
+- Each task has an **ID**, **Description**, and **Status** (complete or incomplete).
 
 ### 4. Saving Tasks (Encryption + Disk Write)
-When `save <filename>` is called:
-1. Tasks are serialized into a byte buffer.
-2. XOR encryption is applied using the user-provided key:
-   ```
-   encrypted_data[i] = data[i] ^ key[i % key_length]
-   ```
-3. The encrypted buffer is written to disk through the kernel disk driver.
+
+When `save` is called:
+
+- Tasks are encoded into a buffer before encryption and storage.
+- XOR encryption is applied using a user-provided key.
+- Encrypted data is written to disk through a kernel disk driver.
 
 ### 5. Loading Tasks (Disk Read + Decryption)
-When `load <filename>` is called:
-1. The encrypted file is read from disk into a buffer.
-2. XOR decryption is applied using the same key (XOR is its own inverse):
-   ```
-   original_data[i] = encrypted_data[i] ^ key[i % key_length]
-   ```
-3. The decrypted data is reconstructed into task structures in memory.
+
+When `load` is called:
+
+- The encrypted file is read from disk.
+- XOR decryption is applied using the same key.
+- Data is reconstructed into task structures in memory.
 
 ---
 
-## System Call Operations
+## Description of the System Call Operation
 
-### `sys_add_task(char *task)`
-Adds a new task to the in-memory task list.
-- Validates the user-space pointer `char *task`
-- Allocates kernel memory for the new task
-- Assigns a unique ID and inserts it into the task list
-- Demonstrates safe memory manipulation and user→kernel pointer validation
+### Add
 
-### `sys_list_tasks()`
-Displays all tasks currently stored in memory.
-- Iterates through the task list
-- Prints each task's ID, description, and status to the terminal via the kernel print function
-- Demonstrates read-only access to kernel-managed data
+`sys_add_task(char *task)` adds a new task to the in-memory task list. The user passes a string, such as a task description. The kernel validates the pointer `char *task`, allocates memory for the new task, assigns a unique ID, and inserts it into a task list such as an array or linked list. This demonstrates safe memory manipulation in kernel space and prevents direct user access to kernel memory.
 
-### `sys_remove_task(int id)`
-Deletes a task by its unique ID.
-- Searches for a task matching the given ID
-- If found: removes it from the data structure and frees associated memory
-- If not found: returns an error message
-- Demonstrates memory deallocation and safe modification of kernel data structures
+### List
 
-### `sys_save_tasks(char *filename, char *key)`
-Saves the current task list to disk using XOR encryption.
-- Serializes tasks into a byte buffer
-- Applies XOR encryption with the provided key
-- Calls the kernel disk driver to create/open the file and write the encrypted data
-- Demonstrates file I/O through the kernel, basic encryption, and data persistence
+`sys_list_tasks()` displays all current tasks stored in memory. The kernel iterates through the task list and prints each task in terms of the ID and description. The output is sent to the terminal through the kernel print function. This demonstrates read-only access to kernel-managed data and shows how the kernel safely exposes information to the user.
 
-### `sys_load_tasks(char *filename, char *key)`
-Loads and restores tasks from an encrypted file on disk.
-- Reads the file from disk into a buffer
-- Applies XOR decryption using the same key
-- Reconstructs task structures in memory from the decrypted data
-- Demonstrates file reading, data reconstruction, and reversible encryption
+### Remove
 
----
+`sys_remove_task(int id)` deletes a task using its unique ID. The kernel searches for tasks with matching IDs. If found, it removes the task from the data structure and frees associated memory. If it is not found, it returns an error message. This demonstrates memory deallocation and safe modification of kernel data structures.
 
-## Interrupt Operation
+### Save
 
-**Keyboard Interrupt (IRQ1):**
-1. User presses a key → hardware interrupt is generated
-2. The CPU pauses the current execution flow
-3. The keyboard interrupt handler is invoked
-4. Keystrokes are registered and processed
-5. Characters are forwarded to the terminal input buffer
-6. Control returns to the running application
+`sys_save_tasks(char* filename, char* key)` saves the current task list to disk using XOR encryption. The tasks are converted into a byte buffer, XOR encryption is applied using the provided key, and then the kernel calls the disk driver to create or open the file and write the encrypted data.
 
----
+Encryption logic:
 
-## Process Operation — `fork()`
-
-1. The terminal shell acts as the **parent process**
-2. When the to-do application is launched, the shell calls `fork()`
-3. A **child process** is created as a copy of the parent
-4. The child process executes the to-do application
-5. The parent process either waits for the child to finish or continues handling future shell input
-
----
-
-## Page Table / Memory Management
-
-| Event | Memory Behavior |
-|---|---|
-| Application startup | OS maps memory pages for the new process |
-| `add <task>` | Additional memory allocated for task strings and input buffers |
-| `save` / `load` | Temporary I/O buffers placed in memory |
-| `fork()` | Child process receives its own address space (copied or copy-on-write) |
-
-Process isolation via the page table ensures that one process cannot interfere with another's memory, supporting safer multitasking on the kernel.
-
----
-
-## Project Structure
-
-```
-cyse570finalproject/
-├── src/
-│   ├── main.c          # Application entry point and command loop
-│   ├── todo.c          # Task management logic (add, list, remove)
-│   ├── todo.h          # Task data structures and function declarations
-│   ├── syscall.c       # System call wrappers for PeachOS
-│   ├── encrypt.c       # XOR encryption / decryption logic
-│   └── disk.c          # Disk I/O helpers (save/load via kernel driver)
-├── Makefile            # Build system
-└── README.md
+```c
+encrypted_data[i] = data[i] ^ key[i % key_length]
 ```
 
----
+This demonstrates file I/O through the kernel, basic encryption, and data persistence.
 
-## Requirements
+### Load
 
-- **PeachOS** built and running (see the [PeachOS repository](https://github.com/nibblebits/PeachOS))
-- `nasm` — assembler for x86 code
-- `i686-elf-gcc` — cross-compiler targeting x86 bare-metal
-- `qemu-system-i386` — emulator for testing
-- GNU `make`
+`sys_load_tasks(char* filename, char* key)` loads and restores tasks from an encrypted file. The kernel reads a file from disk into a buffer, applies XOR decryption using the same key, and reconstructs tasks into memory structures.
 
----
+Decryption logic:
 
-## Building & Running
+```c
+original_data[i] = encrypted_data[i] ^ key[i % key_length]
+```
 
-1. Clone this repository into the PeachOS user programs directory:
-   ```bash
-   git clone https://github.com/exploringtc/cyse570finalproject
-   cd cyse570finalproject
-   ```
+This demonstrates file reading, data reconstruction, and reversible encryption.
 
-2. Build the application:
-   ```bash
-   make
-   ```
-
-3. Rebuild PeachOS to bundle the application into the disk image:
-   ```bash
-   make -C /path/to/PeachOS
-   ```
-
-4. Boot PeachOS in QEMU:
-   ```bash
-   qemu-system-i386 -hda /path/to/PeachOS/boot.img
-   ```
-
-5. Launch the to-do app from the PeachOS shell:
-   ```
-   > todo
-   ```
+Overall, each system call enforces controlled access to kernel resources, ensuring that user-level programs cannot directly manipulate memory or disk without going through a validated kernel interface.
 
 ---
 
-## OS Concepts Demonstrated
+## Description of the Interrupt Operation
 
-| Concept | Implementation |
-|---|---|
-| System Calls | Five custom syscalls for task and file operations |
-| Memory Management | Dynamic allocation/deallocation in kernel space |
-| Encryption | XOR-based reversible encryption for data persistence |
-| Interrupts | Keyboard IRQ handler for terminal input |
-| Process Model | `fork()` — shell spawns child process for the application |
-| Page Tables | Per-process address space; isolation between parent and child |
-| File I/O | Kernel disk driver used for encrypted save/load |
-| VGA Output | Terminal rendering via PeachOS text-mode display |
+### Keyboard Interrupt
+
+1. When the user presses a key, an interrupt is generated.
+2. The CPU pauses the current flow.
+3. The interrupt handler related to the keyboard is run.
+4. Keystrokes are registered and processed.
+5. Key characters are moved into the terminal.
+6. Control returns to the running application.
 
 ---
 
-## References
+## Description of the Process Operation Utilizing `fork()`
 
-- [PeachOS GitHub Repository](https://github.com/nibblebits/PeachOS)
-- CYSE 570 Course Materials — George Mason University
-- [OSDev Wiki](https://wiki.osdev.org/) — Reference for x86 OS development
-- Intel 80386 Programmer's Reference Manual
+1. The terminal acts as the parent process.
+2. When the application starts, the shell calls `fork()`.
+3. A child process is created.
+4. The child process runs the application.
+5. The parent process either waits for the child or continues handling future shell operations.
+
+---
+
+## Description of the Page Table Directory
+
+When the application starts, the OS maps memory pages for that process. When the user adds tasks, more memory may be used for storing task strings and command input. When a file is opened or saved, temporary buffers are placed in memory as well.
+
+When `fork()` is used, the new process will need its own view of memory and therefore a copy of the address space. This prevents one process from interfering with the memory address space of another in a multitasked environment.
+
+---
+
+## Current Implementation & Future Progress for Phase 3
+
+At this stage, the implementation is around 30 to 40 percent complete. The kernel environment is fully set up and the framework of the to-do app is in the `/programs` directory. The parts of the operating system that have been designed include the task data structure, command parser, system call interface, and XOR encryption algorithm, which is partially written.
+
+For Phase 3, the plan is to complete the application by integrating the system calls and interrupt mechanisms and implementing full disk functionality. The next phase also includes finalizing process management with `fork()`, implementing page handling refinements in the command-line interface, and testing the encryption and decryption workflow for accuracy. The final stage will focus on testing, debugging, and full system integration to ensure all components work cohesively.
