@@ -1,6 +1,6 @@
 # Build configuration for the CYSE570 to-do app.
 # CROSS_COMPILE lets you switch toolchains easily (example: i686-elf-).
-CROSS_COMPILE ?=
+CROSS_COMPILE ?= i686-elf-
 CC := $(CROSS_COMPILE)gcc
 
 TARGET := build/todo_app.elf

@@ -5,6 +5,7 @@
 #include "peachos.h"
 #include "string.h"
 
+// Prints usage information for all supported interactive commands.
 static void todo_print_help()
 {
     print("Commands:\n");
@@ -17,6 +18,7 @@ static void todo_print_help()
     print("  exit\n");
 }
 
+// Parses a positive decimal integer and rejects non-digit characters.
 static int parse_int(const char* text, int* out)
 {
     int len = strnlen(text, 32);
@@ -26,6 +28,7 @@ static int parse_int(const char* text, int* out)
     }
 
     int value = 0;
+    // Convert each character manually because libc parsing is unavailable here.
     for (int i = 0; i < len; i++)
     {
         if (!isdigit(text[i]))
@@ -40,6 +43,7 @@ static int parse_int(const char* text, int* out)
     return 0;
 }
 
+// Counts populated token entries after split_tokens() processing.
 static int token_count(char** tokens, int max)
 {
     int count = 0;
@@ -56,6 +60,7 @@ static int token_count(char** tokens, int max)
     return count;
 }
 
+// Splits an input line by spaces into a fixed-size token array.
 static void split_tokens(char* line, char** tokens, int max)
 {
     for (int i = 0; i < max; i++)
@@ -65,6 +70,7 @@ static void split_tokens(char* line, char** tokens, int max)
 
     char* tok = strtok(line, " ");
     int i = 0;
+    // Tokenize in place; each token points into command_buf storage.
     while(tok && i < max)
     {
         tokens[i++] = tok;
@@ -72,14 +78,17 @@ static void split_tokens(char* line, char** tokens, int max)
     }
 }
 
+// Checks whether text begins with the given prefix.
 static int starts_with(const char* text, const char* prefix)
 {
     int len = strlen(prefix);
     return strncmp(text, prefix, len) == 0;
 }
 
+// Interactive REPL loop for task management commands.
 int todo_run()
 {
+    // Loop until explicit exit; command handlers continue on completion.
     while(1)
     {
         print("todo> ");
@@ -92,6 +101,7 @@ int todo_run()
             continue;
         }
 
+        // Fast-path "add" to preserve spaces in the task description.
         if (starts_with(line, "add "))
         {
             const char* task_text = line + 4;
@@ -109,6 +119,7 @@ int todo_run()
             continue;
         }
 
+        // Work on a copy because tokenization modifies the input buffer.
         char command_buf[256];
         strncpy(command_buf, line, sizeof(command_buf));
         char* args[4];
@@ -120,6 +131,7 @@ int todo_run()
             continue;
         }
 
+        // Dispatch command handlers based on the first token.
         if (strncmp(args[0], "help", 4) == 0)
         {
             todo_print_help();
@@ -139,6 +151,7 @@ int todo_run()
                 continue;
             }
 
+            // Validate numeric id before sending remove request.
             int id = 0;
             if (parse_int(args[1], &id) < 0)
             {
@@ -191,6 +204,7 @@ int todo_run()
         }
         else if (strncmp(args[0], "exit", 4) == 0)
         {
+            // Exit back to the OS after clean user feedback.
             print("Exiting todo app\n");
             peachos_exit();
             return 0;
