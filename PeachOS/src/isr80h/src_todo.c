@@ -1,6 +1,39 @@
-/*
- * PeachOS 32-Bit Kernel project
- */
+/* src_todo.c - kernel-side implementation of the todo subsystem.
+
+   this is the bulk of the project's code. five syscall entry points
+   (cmds 10..14) plus the helpers they need:
+
+     cmd 10  add      - copy description from user, find a free slot,
+                        assign a new id
+     cmd 11  list     - print active tasks straight from the kernel
+     cmd 12  remove   - find by id, zero out the slot
+     cmd 13  save     - serialize tasks, XOR with a user key, write to
+                        a fixed disk region
+     cmd 14  load     - read back, decrypt, validate magic, restore
+
+   design notes worth defending in class:
+
+   - tasks live in a fixed-size static array (TODO_MAX_TASKS = 64).
+     no kernel heap involvement, no fragmentation, and removal is
+     just clearing a slot - O(1) and trivially safe.
+
+   - we use an "active" flag rather than compacting the array, so ids
+     stay stable across removes.
+
+   - todo_next_id is monotonic. ids are never recycled, even after
+     the slot is cleared, so a stale id can't quietly hit a brand-new
+     task.
+
+   - copy_string_from_task is used everywhere we get a pointer from
+     userspace. we never deref a raw user pointer in the kernel - a
+     bad pointer should fail the syscall, not crash the kernel.
+
+   - save/load uses a tiny on-disk layout: one catalog sector + N
+     payload sectors per save slot, both stamped with a magic string
+     so load can refuse to interpret garbage. the XOR pass over the
+     payload is *not* real encryption - it's there to keep a hex dump
+     of the disk image from immediately leaking task text and to make
+     sure a corrupted read fails the magic check loudly. */
 
 #include "src_todo.h"
 #include "task/task.h"
@@ -10,11 +43,17 @@
 #include "status.h"
 #include "kernel.h"
 
+/* sizing constants. picked small enough that the static state is cheap
+   and big enough that a demo never bumps the limits. */
 #define TODO_MAX_TASKS 64
 #define TODO_DESC_MAX 64
 #define TODO_FILENAME_MAX 32
 #define TODO_KEY_MAX 64
 
+/* on-disk save area constants. the catalog lives at a fixed LBA way
+   past anything the FAT image touches, so we can't accidentally
+   clobber a real user file. each save slot is 10 sectors (5 KB),
+   plenty for 64 serialized tasks. */
 #define TODO_SAVE_SLOTS 8
 #define TODO_SLOT_SECTORS 10
 #define TODO_SLOT_BYTES (TODO_SLOT_SECTORS * 512)
@@ -24,11 +63,16 @@
 struct todo_task
 {
     int id;
-    int active;
-    int complete;
+    int active;     /* 1 if this slot is in use, 0 if free */
+    int complete;   /* not exposed via the REPL yet, but kept in the
+                       struct + on-disk format so adding a "done"
+                       command later is a one-line change */
     char description[TODO_DESC_MAX];
 };
 
+/* catalog block: one sector at TODO_CATALOG_LBA. tracks which save
+   slots are in use, the saved payload length per slot, and the
+   user-supplied filename for each. */
 struct todo_catalog
 {
     char magic[8];
@@ -38,6 +82,7 @@ struct todo_catalog
     char names[TODO_SAVE_SLOTS][TODO_FILENAME_MAX];
 };
 
+/* on-disk payload header, one per save slot. */
 struct todo_serial_header
 {
     char magic[8];
@@ -45,6 +90,7 @@ struct todo_serial_header
     int task_count;
 };
 
+/* one of these per active task in the serialized payload. */
 struct todo_serial_entry
 {
     int id;
@@ -52,9 +98,15 @@ struct todo_serial_entry
     char description[TODO_DESC_MAX];
 };
 
+/* the entire in-memory model. static so it survives across syscalls
+   and lives in BSS - no allocation paths to worry about. */
 static struct todo_task todo_tasks[TODO_MAX_TASKS];
 static int todo_next_id = 1;
 
+/* tiny int-to-string + print, because we don't have printf in here.
+   builds the digits backwards into a stack buffer then prints from the
+   first non-zero position. handles negatives even though task ids are
+   never negative - cheap insurance. */
 static void todo_print_int(int value)
 {
     char out[16];
@@ -89,6 +141,8 @@ static void todo_print_int(int value)
     print(&out[pos]);
 }
 
+/* find first free slot. returns -1 if the table is full. linear scan
+   is fine - 64 entries is nothing. */
 static int todo_find_free_slot()
 {
     for (int i = 0; i < TODO_MAX_TASKS; i++)
@@ -102,6 +156,7 @@ static int todo_find_free_slot()
     return -1;
 }
 
+/* find an active task by its public id. */
 static int todo_find_task_by_id(int id)
 {
     for (int i = 0; i < TODO_MAX_TASKS; i++)
@@ -129,6 +184,8 @@ static int todo_task_count()
     return count;
 }
 
+/* XOR pass over `data`. used for both encrypt and decrypt - same op.
+   not real crypto. see the file header comment for why we still bother. */
 static void todo_xor_crypt(char* data, int len, const char* key, int key_len)
 {
     for (int i = 0; i < len; i++)
@@ -137,6 +194,8 @@ static void todo_xor_crypt(char* data, int len, const char* key, int key_len)
     }
 }
 
+/* wipe a catalog struct back to a fresh, empty-but-valid state. used
+   when the on-disk catalog is missing or corrupt. */
 static void todo_catalog_default(struct todo_catalog* catalog)
 {
     memset(catalog, 0, sizeof(struct todo_catalog));
@@ -144,6 +203,9 @@ static void todo_catalog_default(struct todo_catalog* catalog)
     catalog->version = 1;
 }
 
+/* read the catalog sector. if the magic/version don't check out we
+   *don't* fail - we hand back a fresh empty catalog. that way the
+   first ever save on a clean disk just works. */
 static int todo_catalog_load(struct todo_catalog* catalog)
 {
     struct disk* disk = disk_get(0);
@@ -182,6 +244,10 @@ static int todo_catalog_save(struct todo_catalog* catalog)
     return disk_write_block(disk, TODO_CATALOG_LBA, 1, sector);
 }
 
+/* find a slot to save into: if a slot already has this filename, reuse
+   it (so save acts as overwrite). otherwise hand back the first free
+   slot. -1 only when both the named slot doesn't exist AND no slots
+   are free. */
 static int todo_save_slot_index(struct todo_catalog* catalog, const char* filename)
 {
     for (int i = 0; i < TODO_SAVE_SLOTS; i++)
@@ -203,6 +269,8 @@ static int todo_save_slot_index(struct todo_catalog* catalog, const char* filena
     return -1;
 }
 
+/* strict lookup for load: only returns a slot if the name actually
+   matches an existing entry. */
 static int todo_find_slot_index(struct todo_catalog* catalog, const char* filename)
 {
     for (int i = 0; i < TODO_SAVE_SLOTS; i++)
@@ -218,6 +286,10 @@ static int todo_find_slot_index(struct todo_catalog* catalog, const char* filena
 
 
 
+/* rebuild the in-memory task array from a decrypted payload buffer.
+   validates the magic before touching todo_tasks - that's the bit
+   that turned out to be a real lifesaver during development. without
+   it, a wrong key just silently restored garbage. */
 static int todo_restore_from_plain(char* plain, unsigned int plain_len)
 {
     struct todo_serial_header header;
@@ -409,6 +481,9 @@ static int todo_load_from_disk(const char* filename, const char* key)
 
 void* isr80h_command10_todo_add(struct interrupt_frame* frame)
 {
+    /* user passed a pointer to the description string. copy it into a
+       kernel buffer rather than dereferencing it in place - that's the
+       only safe way to handle a foreign pointer in here. */
     void* task_ptr = task_get_stack_item(task_current(), 0);
     char task_desc[TODO_DESC_MAX];
     int res = copy_string_from_task(task_current(), task_ptr, task_desc, sizeof(task_desc));
@@ -417,6 +492,7 @@ void* isr80h_command10_todo_add(struct interrupt_frame* frame)
         return ERROR(-EINVARG);
     }
 
+    /* reject empty strings - they'd just clutter the list. */
     if (strnlen(task_desc, sizeof(task_desc)) <= 0)
     {
         return ERROR(-EINVARG);
@@ -433,6 +509,7 @@ void* isr80h_command10_todo_add(struct interrupt_frame* frame)
     todo_tasks[slot].complete = 0;
     strncpy(todo_tasks[slot].description, task_desc, sizeof(todo_tasks[slot].description));
 
+    /* hand the new id back to user space as the syscall return value. */
     return (void*) todo_tasks[slot].id;
 }
 
@@ -475,6 +552,9 @@ void* isr80h_command12_todo_remove(struct interrupt_frame* frame)
         return ERROR(-EINVARG);
     }
 
+    /* memset the entire struct rather than just clearing `active`, so
+       there's no chance stale description bytes leak into a later
+       slot reuse. cheap belt-and-braces move. */
     memset(&todo_tasks[slot], 0, sizeof(struct todo_task));
     return 0;
 }

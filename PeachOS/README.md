@@ -1,43 +1,74 @@
-# Todo App
+# todo on PeachOS
 
-A simple todo list that runs on PeachOS.
+Little todo-list program I built so it runs on top of PeachOS as a normal
+user program (todo.elf), launched from the shell.
 
-Commands:
-- add <task>
-- list
-- remove <id>
-- help
-- exit
+It's nothing fancy: add stuff, list it, remove it, save/load to disk.
+The point of the project was less about the todo app itself and more
+about wiring up a user program end-to-end - syscalls, the int 0x80 path,
+disk read/write, and the FAT image build.
 
-Build:
+## commands inside the app
+
+```
+add <task>      add a new task
+list            show what's there
+remove <id>     drop a task by its id
+help            print commands
+exit            back to the shell
+```
+
+ids are just whatever the kernel handed out, they don't reset when you
+remove things - that's intentional so you can't accidentally reuse one
+mid-session.
+
+There are also save/load syscalls wired up on the kernel side (with a
+little XOR-obfuscated on-disk format), but we kept them out of the
+interactive REPL on purpose - the in-class demo stays focused on the
+add/list/remove syscall path. See CHANGES_FROM_NIBBLEBITS.txt for the
+full story.
+
+## building
+
+```
 ./build.sh
+```
 
-Run:
+The build script calls into the Makefile, which compiles the kernel,
+the stdlib, the shell, and todo, then assembles everything into
+`bin/os.bin`. The todo.elf gets `mcopy`'d into the FAT region of the
+image so the shell can find it at runtime.
+
+If the build complains about `mtools` or `nasm`, install those first.
+On Debian/Ubuntu:
+
+```
+sudo apt install nasm mtools qemu-system-x86 build-essential
+```
+
+## running
+
+```
 qemu-system-i386 -hda PeachOS/bin/os.bin
+```
 
-Then type todo to start.
+Once it boots into the shell prompt, just type:
 
-- Understanding of the C programming language
-- Understanding of Assembly Language
+```
+todo
+```
 
-## Who is this course for?
+and the app takes over. `exit` drops you back to the shell.
 
-This course is ideal for individuals interested in developing a kernel from scratch.
+## what was changed vs upstream PeachOS
 
-## What you'll learn
+See `CHANGES_FROM_NIBBLEBITS.txt` for the file-by-file notes. Short
+version: added syscalls 10-14, a kernel-side todo backend in
+`src/isr80h/src_todo.c`, write support in the disk driver so save/load
+actually persists, and a new user program under `programs/todo/`.
 
-By the end of the course, you will acquire skills in:
+## credit
 
-- Creating a kernel from scratch
-- Developing a multi-tasking kernel
-- Handling problematic programs in your operating system
-- Understanding how memory works in computers
-- Differentiating between kernel land, user land, and the protection rings
-- Learning kernel design patterns used by Linux
-- Understanding and implementing virtual memory
-- Developing processes and tasks in the kernel
-- Loading ELF files
-- Debugging disassembled machine code
-- Debugging your kernel in an emulator with GDB
-
-Ready to begin your kernel development journey? [Enroll in the course now](https://dragonzap.com/course/developing-a-multithreaded-kernel-from-scratch?coupon=GITHUBKERNELDISCOUNT) with a special discount!
+Base kernel is from nibblebits/PeachOS. Everything todo-related (the
+user program, the syscall handlers, the disk write path needed for
+save/load, and the build glue) is what I added on top for this project.
