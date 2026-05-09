@@ -1,6 +1,36 @@
+/*
+ * todo.c - User-space todo REPL.
+ *
+ * What this file does:
+ *   - Prints a welcome banner.
+ *   - Reads one line of input at a time.
+ *   - Dispatches to add / list / remove / help / exit.
+ *
+ * How it talks to the kernel:
+ *   - peachos_todo_add / list / remove are syscalls.
+ *   - Implementation: programs/stdlib/src/peachos.asm (int 0x80 wrappers).
+ *   - Kernel handlers: src/isr80h/src_todo.c.
+ */
+
 #include "todo.h"
 #include "peachos.h"
 #include "string.h"
+
+/* All user-facing strings live here so they are easy to find and edit. */
+#define MSG_WELCOME       "Todo App\n"
+#define MSG_HINT          "Type 'help' for commands.\n\n"
+#define MSG_PROMPT        "todo> "
+#define MSG_BYE           "Bye\n"
+#define MSG_UNKNOWN       "Unknown command\n"
+#define MSG_USAGE_ADD     "Usage: add <task>\n"
+#define MSG_BAD_ID        "ERROR: Invalid task ID\n"
+#define MSG_ADD_OK        "Task added\n"
+#define MSG_ADD_FAIL      "ERROR: Failed to add task\n"
+#define MSG_LIST_FAIL     "ERROR: Failed to list tasks\n"
+#define MSG_REMOVE_OK     "Task removed\n"
+#define MSG_REMOVE_FAIL   "ERROR: Failed to remove task\n"
+
+/* Helpers (kept tiny so the REPL stays the focus). */
 
 static void print_help(void)
 {
@@ -10,6 +40,17 @@ static void print_help(void)
     print("  remove <id>\n");
     print("  help\n");
     print("  exit\n");
+}
+
+static int starts_with(const char* text, const char* prefix)
+{
+    return strncmp(text, prefix, strlen(prefix)) == 0;
+}
+
+static int equals(const char* text, const char* word)
+{
+    int n = strlen(word);
+    return strncmp(text, word, n) == 0 && (text[n] == 0 || text[n] == '\n');
 }
 
 static int parse_int(const char* text, int* out)
@@ -30,20 +71,23 @@ static int parse_int(const char* text, int* out)
     return 0;
 }
 
-static int starts_with(const char* text, const char* prefix)
-{
-    int len = strlen(prefix);
-    return strncmp(text, prefix, len) == 0;
-}
-
+/*
+ * todo_run - main REPL.
+ * Each command follows the same shape:
+ *   1) validate input
+ *   2) call the kernel through a syscall wrapper
+ *   3) print success or error
+ */
 int todo_run(void)
 {
-    print("Todo App\n");
-    print("Type 'help' for commands.\n\n");
+    /* 1. Welcome banner */
+    print(MSG_WELCOME);
+    print(MSG_HINT);
 
     while (1)
     {
-        print("todo> ");
+        /* 2. Read one command line from the terminal */
+        print(MSG_PROMPT);
         char line[256];
         peachos_terminal_readline(line, sizeof(line), true);
         print("\n");
@@ -53,61 +97,59 @@ int todo_run(void)
             continue;
         }
 
+        /* 3. Dispatch command */
+
+        /* add <task> */
         if (starts_with(line, "add "))
         {
             const char* task_text = line + 4;
             if (strnlen(task_text, 64) == 0)
-            {
-                print("Usage: add <task>\n");
-            }
+                print(MSG_USAGE_ADD);
             else if (peachos_todo_add(task_text) < 0)
-            {
-                print("ERROR: Failed to add task\n");
-            }
+                print(MSG_ADD_FAIL);
             else
-            {
-                print("Task added\n");
-            }
+                print(MSG_ADD_OK);
             continue;
         }
 
-        if (strncmp(line, "help", 4) == 0)
-        {
-            print_help();
-        }
-        else if (strncmp(line, "list", 4) == 0)
+        /* list */
+        if (equals(line, "list"))
         {
             if (peachos_todo_list() < 0)
-            {
-                print("ERROR: Failed to list tasks\n");
-            }
+                print(MSG_LIST_FAIL);
+            continue;
         }
-        else if (starts_with(line, "remove "))
+
+        /* remove <id> */
+        if (starts_with(line, "remove "))
         {
             int id = 0;
             if (parse_int(line + 7, &id) < 0)
-            {
-                print("ERROR: Invalid task ID\n");
-            }
+                print(MSG_BAD_ID);
             else if (peachos_todo_remove(id) < 0)
-            {
-                print("ERROR: Failed to remove task\n");
-            }
+                print(MSG_REMOVE_FAIL);
             else
-            {
-                print("Task removed\n");
-            }
+                print(MSG_REMOVE_OK);
+            continue;
         }
-        else if (strncmp(line, "exit", 4) == 0)
+
+        /* help */
+        if (equals(line, "help"))
         {
-            print("Bye\n");
+            print_help();
+            continue;
+        }
+
+        /* exit */
+        if (equals(line, "exit"))
+        {
+            print(MSG_BYE);
             peachos_exit();
             return 0;
         }
-        else
-        {
-            print("Unknown command\n");
-        }
+
+        /* unknown */
+        print(MSG_UNKNOWN);
     }
 
     return 0;

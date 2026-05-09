@@ -2,8 +2,8 @@
  * PeachOS 32-Bit Kernel project
  */
 
-#ifndef ISR80H_TODO_H
-#define ISR80H_TODO_H
+#ifndef ISR80H_SRC_TODO_H
+#define ISR80H_SRC_TODO_H
 
 struct interrupt_frame;
 

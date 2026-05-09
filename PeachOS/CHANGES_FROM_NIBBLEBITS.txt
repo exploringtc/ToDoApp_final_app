@@ -1,8 +1,7 @@
-
 PeachOS Todo App - Changes Compared to nibblebits/PeachOS
 
 Purpose
-This file explains what was changed from the upstream PeachOS repository so the todo app can run on top of PeachOS.
+This file explains what was changed from the upstream PeachOS repository so the todo app can run on top of PeachOS, how todo.elf is loaded and executed, and how data is handled in memory and disk.
 
 Comparison baseline
 - Upstream repository: https://github.com/nibblebits/PeachOS
@@ -11,15 +10,18 @@ Comparison baseline
 
 1) Makefile
 What changed:
-- Added kernel object build rule for src/isr80h/todo.c (todo syscall handlers).
+- Added kernel object build rule for src/isr80h/src_todo.c (todo syscall handlers).
 - Added todo object into kernel link list.
 - Added programs/todo into user_programs and user_programs_clean targets.
 - Added copy step for programs/todo/todo.elf into os.bin image.
 - Switched user-file copy path to mcopy-based flow for easier host compatibility.
 Why it helps:
-- Ensures todo kernel handlers are compiled.
-- Ensures todo user program is built.
-- Ensures todo.elf is included in the boot image so it can be launched from shell.
+- Ensures the kernel backend for todo exists in kernel.bin.
+- Ensures the user app (todo.elf) exists in the FAT image area of os.bin.
+- Ensures shell can resolve and launch todo.elf at runtime.
+Behavior details:
+- During build, kernel object src_todo.c is compiled into build/isr80h/todo.o.
+- During image assembly, todo.elf is copied as a user file, making it visible to shell command execution.
 
 2) programs/stdlib/src/peachos.h
 What changed:
@@ -30,37 +32,61 @@ What changed:
   peachos_todo_save
   peachos_todo_load
 Why it helps:
-- Exposes kernel todo services to user-space C code.
+- Exposes kernel todo services to user-space C code with a clean API.
+Behavior details:
+- The todo user program never accesses kernel memory directly.
+- It always goes through these APIs, which become int 0x80 calls in assembly.
 
 3) programs/stdlib/src/peachos.asm
 What changed:
 - Added int 0x80 wrappers for todo syscall IDs 10 to 14.
 Why it helps:
-- Provides callable user-space stubs that enter kernel mode to run todo operations.
+- Provides user-mode entry points that cross privilege boundary into kernel mode.
+Behavior details:
+- Each wrapper sets EAX to a command number, pushes arguments on stack, then executes int 0x80.
+- Example mapping:
+  EAX=10 add
+  EAX=11 list
+  EAX=12 remove
+  EAX=13 save
+  EAX=14 load
+- Kernel interrupt/syscall dispatcher reads EAX and routes to matching handler.
 
 4) programs/todo/Makefile
 What changed:
 - Build script for todo user program.
 Why it helps:
 - Produces todo.elf that shell can run.
+Behavior details:
+- Compiles main.c and todo.c, then links with stdlib.elf.
+- Uses linker.ld for expected user-space ELF layout.
 
 5) programs/todo/linker.ld
 What changed:
 - Linker script for the todo ELF layout.
 Why it helps:
 - Ensures todo binary is linked in the format expected by PeachOS loader.
+Behavior details:
+- ENTRY(_start) binds startup sequence from userspace runtime.
+- OUTPUT_FORMAT(elf32-i386) matches 32-bit loader expectations.
+- Program base address is 0x400000 so the process is mapped into expected user-space virtual range.
 
 6) programs/todo/main.c
 What changed:
 - Minimal main entry point that calls todo_run().
 Why it helps:
 - Defines app process entry for the todo program.
+Behavior details:
+- Keeps startup simple for explanation and debugging.
+- All command logic is intentionally centralized in todo_run().
 
 7) programs/todo/todo.h
 What changed:
 - Header for todo_run declaration.
 Why it helps:
-- Clean separation of program interface and implementation.
+- Clean separation of interface and implementation.
+Behavior details:
+- Lets main.c call todo_run() without duplicating implementation details.
 
 8) programs/todo/todo.c
 What changed:
@@ -73,27 +99,47 @@ What changed:
 - Calls todo syscalls through peachos stdlib API.
 Why it helps:
 - This is the actual todo user application running on top of PeachOS.
+Behavior details:
+- On launch, prints welcome banner and help hint.
+- Reads line input from terminal driver using peachos_terminal_readline.
+- add command extracts text after "add " and calls peachos_todo_add.
+- list command calls peachos_todo_list, kernel prints active tasks.
+- remove command parses numeric id then calls peachos_todo_remove.
+- exit command calls peachos_exit, yielding process control back to shell.
 
 9) src/isr80h/isr80h.h
 What changed:
 - Added syscall enum values for todo commands 10 to 14.
 Why it helps:
 - Allocates kernel command IDs so int 0x80 dispatch can route todo requests.
+Behavior details:
+- This enum is the contract between user wrappers and kernel dispatcher.
+- If numbers mismatch, commands execute wrong handlers.
 
 10) src/isr80h/isr80h.c
 What changed:
-- Included todo handler header.
+- Included src_todo.h.
 - Registered todo syscall handlers in isr80h_register_commands().
 Why it helps:
 - Wires syscall numbers to implementation functions at runtime.
+Behavior details:
+- Boot-time command table registration binds:
+  command 10 -> isr80h_command10_todo_add
+  command 11 -> isr80h_command11_todo_list
+  command 12 -> isr80h_command12_todo_remove
+  command 13 -> isr80h_command13_todo_save
+  command 14 -> isr80h_command14_todo_load
 
-11) src/isr80h/todo.h
+11) src/isr80h/src_todo.h
 What changed:
 - Declared kernel todo syscall handler prototypes.
 Why it helps:
-- Lets isr80h module register and call todo handlers cleanly.
+- Allows isr80h.c and src_todo.c to share consistent function signatures.
+Behavior details:
+- Declares command handlers that receive interrupt_frame context.
+- Keeps interface clear between generic syscall layer and todo subsystem.
 
-12) src/isr80h/todo.c
+12) src/isr80h/src_todo.c
 What changed:
 - Implemented kernel todo subsystem:
   in-kernel task array
@@ -102,13 +148,80 @@ What changed:
   serialization and XOR encryption helpers
   disk catalog/data slot logic
 Why it helps:
-- Provides the kernel-side logic that the user todo app depends on.
+- Provides all backend logic required by todo.elf.
+
+Behavior details (in smallest practical breakdown):
+
+- Constants and capacity:
+  TODO_MAX_TASKS controls max active items held in kernel memory.
+  TODO_DESC_MAX controls each task description byte limit.
+  TODO_SAVE_SLOTS controls number of named save files in catalog.
+  TODO_SLOT_SECTORS controls max per-save payload sectors on disk.
+
+- Memory model:
+  todo_tasks is a static kernel array of struct todo_task.
+  Each element has id, active flag, complete flag, description buffer.
+  todo_next_id is monotonic counter for unique task IDs.
+
+- Runtime add flow:
+  isr80h_command10_todo_add reads user pointer from current task stack.
+  copy_string_from_task copies user memory into kernel buffer safely.
+  Validation rejects empty string.
+  todo_find_free_slot scans for inactive element.
+  On success kernel writes id/flags/description into selected slot.
+  Returns task id to caller.
+
+- Runtime list flow:
+  isr80h_command11_todo_list counts active tasks.
+  If none, prints "No tasks available".
+  Otherwise iterates todo_tasks and prints [id] description lines.
+
+- Runtime remove flow:
+  isr80h_command12_todo_remove reads id argument from task stack item.
+  todo_find_task_by_id scans active entries.
+  On match, memset clears full struct (deletes task).
+
+- Save format model:
+  Catalog region stores metadata for save slots.
+  Data region stores encrypted serialized task payload.
+
+- Magic/version checks:
+  Catalog uses magic "TDOCAT1" with version=1.
+  Data header uses magic "TDODAT1".
+  Load path validates magic before accepting data.
+
+- Disk placement:
+  TODO_CATALOG_LBA is fixed sector for catalog block.
+  TODO_DATA_BASE_LBA is first sector for save payloads.
+  Slot N payload starts at TODO_DATA_BASE_LBA + N*TODO_SLOT_SECTORS.
+
+- Save execution flow:
+  todo_save_to_disk builds plain buffer with header and entries.
+  Header stores next_id and task_count.
+  Each active task serialized as id/complete/description struct.
+  Buffer is XOR encrypted with key.
+  Catalog is loaded and target slot selected.
+  Encrypted payload sectors written with disk_write_block.
+  Catalog metadata updated and written back.
+
+- Load execution flow:
+  todo_load_from_disk loads catalog and finds named slot.
+  Reads payload sectors with disk_read_block.
+  Decrypts payload by XOR with same key.
+  todo_restore_from_plain validates header and reconstructs todo_tasks.
+  Restores todo_next_id for future additions.
+
+- Error handling model:
+  Uses status codes like -EINVARG, -ENOMEM, -EIO.
+  ISR handlers return ERROR(code) pointers for syscall ABI.
 
 13) src/disk/disk.h
 What changed:
 - Added disk_write_block declaration.
 Why it helps:
 - Needed by kernel todo save path to persist serialized data.
+Behavior details:
+- Allows higher-level modules (src_todo.c) to write full logical blocks instead of low-level port operations directly.
 
 14) src/disk/disk.c
 What changed:
@@ -116,6 +229,10 @@ What changed:
 - Added timeout/error-aware ATA ready polling.
 Why it helps:
 - Enables and stabilizes disk write/read operations used by todo save/load in kernel.
+Behavior details:
+- disk_write_sector handles ATA command path for sector writes.
+- disk_write_block loops sector operations for larger buffers.
+- Polling logic reduces chance of silent hangs during device busy/error states.
 
 15) src/kernel.c
 What changed:
@@ -123,56 +240,106 @@ What changed:
 - Added terminal scroll-up behavior.
 - Removed old blank.elf argument-injection demo flow.
 Why it helps:
-- Shell startup is required so you can launch todo command from shell.
-- Better terminal output handling improves usability while interacting with todo.
+- Shell startup is required so user can type and launch todo.
+- Better terminal output handling improves usability.
+Behavior details:
+- Boot sequence ends by running shell process.
+- shell acts as user command interpreter and program launcher.
+
+---
+
+Runtime relationship map (how todo.elf actually runs)
+
+1) Boot and shell startup
+- Kernel boots.
+- Kernel starts shell.elf as initial user process.
+
+2) User launches todo
+- User types todo in shell.
+- shell loads todo.elf from FAT image and creates a user process.
+
+3) todo.elf command loop
+- main() calls todo_run().
+- todo_run() reads command text and branches by command string.
+
+4) Crossing user -> kernel
+- todo user code calls peachos_todo_* wrappers.
+- wrapper sets EAX syscall number and executes int 0x80.
+
+5) ISR80H dispatch
+- isr80h dispatcher uses syscall number to call matching kernel handler.
+- handler in src_todo.c performs operation on kernel todo storage.
+
+6) Return path
+- handler returns status/value.
+- syscall returns to user mode.
+- todo.elf prints result and continues prompt loop.
+
+7) Save/load path
+- save/load command calls syscall 13/14.
+- kernel serializes/decrypts data and uses disk layer for IO.
+- catalog and payload sectors are read/written at fixed LBAs.
 
 ---
 
 Script-style explanation for each file:
 
 1) Makefile
-"I added rules to build and link the todo kernel code (isr80h/todo.c) and the todo user program. I also made sure todo.elf gets copied into the OS image, so when I boot PeachOS and type 'todo', the shell can find and run my app."
+"I changed the build pipeline so kernel todo backend and todo user app are both included. That means src/isr80h/src_todo.c is compiled into kernel.bin, and programs/todo/todo.elf is copied into os.bin. Without this, shell cannot launch todo and syscalls would not exist."
 
 2) programs/stdlib/src/peachos.h
-"I added five new function declarations: peachos_todo_add, peachos_todo_list, peachos_todo_remove, peachos_todo_save, and peachos_todo_load. These are the C functions my todo app calls to talk to the kernel."
+"I added the C function declarations for todo syscalls. My user app calls these functions, and this keeps user code clean and readable instead of writing assembly in the app."
 
 3) programs/stdlib/src/peachos.asm
-"I wrote the assembly wrappers for those five syscalls. Each one sets up the right syscall number and arguments, then triggers int 0x80 to enter the kernel. This is how my C code actually gets into the kernel to do todo operations."
+"I implemented the syscall bridge. Each wrapper puts a command number in EAX and executes int 0x80. That is the exact jump from user mode to kernel mode for todo features."
 
 4) programs/todo/Makefile
-"This is a new file. It builds my todo user program. Without it, there would be no todo.elf to run."
+"This file builds todo.elf from main.c and todo.c and links against stdlib.elf. If this Makefile is missing, there is no runnable todo program for shell to execute."
 
 5) programs/todo/linker.ld
-"This linker script makes sure my todo.elf is in the right format for PeachOS to load and run."
+"This file defines how todo.elf is laid out in memory. We use a 32-bit ELF format and base address 0x400000 so PeachOS loader maps it where user programs are expected."
 
 6) programs/todo/main.c
-"This is the entry point for my todo app. It just calls todo_run(). Without this file, the program wouldn’t start."
+"main is intentionally tiny and only calls todo_run(). This keeps startup behavior obvious and all command logic in one place."
 
 7) programs/todo/todo.h
-"This header declares todo_run(). It keeps the code organized and lets main.c call the command loop."
+"This declares todo_run so main.c can call it. It is simple but important for clean compile-time separation."
 
 8) programs/todo/todo.c
-"This is the main logic for my todo app. It reads commands from the user, like 'add', 'list', or 'remove', and calls the right kernel functions. It’s a simple REPL loop."
+"This is the user-facing REPL. It prints welcome text, reads commands, and for add/list/remove it calls peachos_todo_* APIs. On exit it calls peachos_exit to terminate the process and return to shell."
 
 9) src/isr80h/isr80h.h
-"I added new syscall numbers for the todo commands. This tells the kernel which numbers mean 'add a task', 'list tasks', etc."
+"I added syscall IDs 10 to 14 for todo operations. Those numbers are the contract between user wrappers and kernel handlers."
 
 10) src/isr80h/isr80h.c
-"I included the todo handler header and registered my todo syscalls with the kernel. This is what actually connects the syscall numbers to my todo logic."
+"I registered the todo handlers in the syscall table. This is where command ID is connected to actual function code."
 
-11) src/isr80h/todo.h
-"This header declares the kernel-side todo syscall handlers. It’s needed so isr80h.c can call them."
+11) src/isr80h/src_todo.h
+"This declares the kernel handler prototypes used by the dispatcher. It ensures signatures stay consistent."
 
-12) src/isr80h/todo.c
-"This is the heart of the kernel-side todo system. It keeps the task list in memory, handles adding, listing, and removing tasks, and (optionally) saving/loading them to disk. All the real work happens here."
+12) src/isr80h/src_todo.c
+"This is the kernel backend for todo. It stores active tasks in static kernel memory, assigns IDs, prints task lists, removes by ID, and supports disk save/load. Save/load uses a catalog sector plus per-slot payload sectors, with magic headers and XOR encryption to validate and protect format."
 
 13) src/disk/disk.h
-"I added a function to write blocks to disk. This is needed for saving tasks to disk from the kernel."
+"I added a write API declaration so higher-level kernel code can request block writes safely."
 
 14) src/disk/disk.c
-"I added the actual code to write to disk, and made the read/write code more robust with timeouts and error checks. This makes sure saving and loading tasks works reliably."
+"I added and hardened block write/read behavior so save/load can reliably persist todo data to disk sectors."
 
 15) src/kernel.c
-"I changed the kernel to start the shell instead of blank.elf, so I can type 'todo' and run my app. I also improved the terminal output so it scrolls when there’s too much text."
+"I changed startup to shell.elf so the interaction model is: boot -> shell prompt -> run todo. This is required for demonstrating the app in a real command workflow."
+
+---
+
+Short operational summary for demo narration
+
+- Boot PeachOS.
+- shell.elf starts.
+- Run todo.
+- todo.elf starts, prints welcome/help prompt.
+- add/list/remove call syscalls through int 0x80.
+- kernel handlers in src_todo.c update kernel memory array.
+- optional save/load stores/restores serialized tasks to fixed disk LBA regions.
+- exit returns from todo process to shell.
 
 

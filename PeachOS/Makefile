@@ -84,8 +84,8 @@ all: ./bin/boot.bin ./bin/kernel.bin user_programs
 ./build/isr80h/process.o: ./src/isr80h/process.c
 	i686-elf-gcc $(INCLUDES) -I./src/isr80h $(FLAGS) -std=gnu99 -c ./src/isr80h/process.c -o ./build/isr80h/process.o
 
-./build/isr80h/todo.o: ./src/isr80h/todo.c
-	i686-elf-gcc $(INCLUDES) -I./src/isr80h $(FLAGS) -std=gnu99 -c ./src/isr80h/todo.c -o ./build/isr80h/todo.o
+./build/isr80h/todo.o: ./src/isr80h/src_todo.c
+	i686-elf-gcc $(INCLUDES) -I./src/isr80h $(FLAGS) -std=gnu99 -c ./src/isr80h/src_todo.c -o ./build/isr80h/todo.o
 
 
 ./build/keyboard/keyboard.o: ./src/keyboard/keyboard.c

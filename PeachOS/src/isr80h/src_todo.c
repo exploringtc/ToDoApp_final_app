@@ -2,7 +2,7 @@
  * PeachOS 32-Bit Kernel project
  */
 
-#include "todo.h"
+#include "src_todo.h"
 #include "task/task.h"
 #include "string/string.h"
 #include "memory/memory.h"
@@ -10,13 +10,13 @@
 #include "status.h"
 #include "kernel.h"
 
-#define TODO_MAX_TASKS 24
+#define TODO_MAX_TASKS 64
 #define TODO_DESC_MAX 64
 #define TODO_FILENAME_MAX 32
 #define TODO_KEY_MAX 64
 
 #define TODO_SAVE_SLOTS 8
-#define TODO_SLOT_SECTORS 8
+#define TODO_SLOT_SECTORS 10
 #define TODO_SLOT_BYTES (TODO_SLOT_SECTORS * 512)
 #define TODO_CATALOG_LBA 32000
 #define TODO_DATA_BASE_LBA (TODO_CATALOG_LBA + 1)
