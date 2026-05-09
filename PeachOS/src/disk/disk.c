@@ -37,6 +37,32 @@
 
 struct disk disk;
 
+#define ATA_STATUS_ERR 0x01
+#define ATA_STATUS_DRQ 0x08
+#define ATA_STATUS_DF  0x20
+#define ATA_STATUS_BSY 0x80
+#define ATA_IO_TIMEOUT 1000000
+
+static int disk_wait_for_data_ready()
+{
+    for (int i = 0; i < ATA_IO_TIMEOUT; i++)
+    {
+        unsigned char status = insb(0x1F7);
+
+        if (status & (ATA_STATUS_ERR | ATA_STATUS_DF))
+        {
+            return -EIO;
+        }
+
+        if (!(status & ATA_STATUS_BSY) && (status & ATA_STATUS_DRQ))
+        {
+            return 0;
+        }
+    }
+
+    return -EIO;
+}
+
 int disk_read_sector(int lba, int total, void* buf)
 {
     outb(0x1F6, (lba >> 24) | 0xE0);
@@ -49,11 +75,9 @@ int disk_read_sector(int lba, int total, void* buf)
     unsigned short* ptr = (unsigned short*) buf;
     for (int b = 0; b < total; b++)
     {
-        // Wait for the buffer to be ready
-        char c = insb(0x1F7);
-        while(!(c & 0x08))
+        if (disk_wait_for_data_ready() < 0)
         {
-            c = insb(0x1F7);
+            return -EIO;
         }
 
         // Copy from hard disk to memory
@@ -79,10 +103,9 @@ int disk_write_sector(int lba, int total, void* buf)
     unsigned short* ptr = (unsigned short*) buf;
     for (int b = 0; b < total; b++)
     {
-        char c = insb(0x1F7);
-        while(!(c & 0x08))
+        if (disk_wait_for_data_ready() < 0)
         {
-            c = insb(0x1F7);
+            return -EIO;
         }
 
         for (int i = 0; i < 256; i++)

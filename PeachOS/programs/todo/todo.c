@@ -1,41 +1,28 @@
 #include "todo.h"
-#include "disk.h"
-#include "stdio.h"
-#include "stdlib.h"
 #include "peachos.h"
 #include "string.h"
 
-// Prints usage information for all supported interactive commands.
-static void todo_print_help()
+static void print_help(void)
 {
     print("Commands:\n");
     print("  add <task>\n");
     print("  list\n");
     print("  remove <id>\n");
-    print("  save <filename> <key>\n");
-    print("  load <filename> <key>\n");
     print("  help\n");
     print("  exit\n");
 }
 
-// Parses a positive decimal integer and rejects non-digit characters.
 static int parse_int(const char* text, int* out)
 {
     int len = strnlen(text, 32);
     if (len <= 0)
-    {
         return -1;
-    }
 
     int value = 0;
-    // Convert each character manually because libc parsing is unavailable here.
     for (int i = 0; i < len; i++)
     {
         if (!isdigit(text[i]))
-        {
             return -1;
-        }
-
         value = (value * 10) + tonumericdigit(text[i]);
     }
 
@@ -43,53 +30,18 @@ static int parse_int(const char* text, int* out)
     return 0;
 }
 
-// Counts populated token entries after split_tokens() processing.
-static int token_count(char** tokens, int max)
-{
-    int count = 0;
-    for (int i = 0; i < max; i++)
-    {
-        if (!tokens[i])
-        {
-            break;
-        }
-
-        count++;
-    }
-
-    return count;
-}
-
-// Splits an input line by spaces into a fixed-size token array.
-static void split_tokens(char* line, char** tokens, int max)
-{
-    for (int i = 0; i < max; i++)
-    {
-        tokens[i] = 0;
-    }
-
-    char* tok = strtok(line, " ");
-    int i = 0;
-    // Tokenize in place; each token points into command_buf storage.
-    while(tok && i < max)
-    {
-        tokens[i++] = tok;
-        tok = strtok(0, " ");
-    }
-}
-
-// Checks whether text begins with the given prefix.
 static int starts_with(const char* text, const char* prefix)
 {
     int len = strlen(prefix);
     return strncmp(text, prefix, len) == 0;
 }
 
-// Interactive REPL loop for task management commands.
-int todo_run()
+int todo_run(void)
 {
-    // Loop until explicit exit; command handlers continue on completion.
-    while(1)
+    print("Todo App\n");
+    print("Type 'help' for commands.\n\n");
+
+    while (1)
     {
         print("todo> ");
         char line[256];
@@ -101,117 +53,60 @@ int todo_run()
             continue;
         }
 
-        // Fast-path "add" to preserve spaces in the task description.
         if (starts_with(line, "add "))
         {
             const char* task_text = line + 4;
-            int id = sys_add_task(task_text);
-            if (id < 0)
+            if (strnlen(task_text, 64) == 0)
             {
-                print("Failed to add task\n");
+                print("Usage: add <task>\n");
+            }
+            else if (peachos_todo_add(task_text) < 0)
+            {
+                print("ERROR: Failed to add task\n");
             }
             else
             {
-                print("Added task with id ");
-                print(itoa(id));
-                print("\n");
+                print("Task added\n");
             }
             continue;
         }
 
-        // Work on a copy because tokenization modifies the input buffer.
-        char command_buf[256];
-        strncpy(command_buf, line, sizeof(command_buf));
-        char* args[4];
-        split_tokens(command_buf, args, 4);
-        int argc = token_count(args, 4);
-
-        if (argc == 0)
+        if (strncmp(line, "help", 4) == 0)
         {
-            continue;
+            print_help();
         }
-
-        // Dispatch command handlers based on the first token.
-        if (strncmp(args[0], "help", 4) == 0)
+        else if (strncmp(line, "list", 4) == 0)
         {
-            todo_print_help();
-        }
-        else if (strncmp(args[0], "list", 4) == 0)
-        {
-            if (sys_list_tasks() < 0)
+            if (peachos_todo_list() < 0)
             {
-                print("Failed to list tasks\n");
+                print("ERROR: Failed to list tasks\n");
             }
         }
-        else if (strncmp(args[0], "remove", 6) == 0)
+        else if (starts_with(line, "remove "))
         {
-            if (argc < 2)
-            {
-                print("Usage: remove <id>\n");
-                continue;
-            }
-
-            // Validate numeric id before sending remove request.
             int id = 0;
-            if (parse_int(args[1], &id) < 0)
+            if (parse_int(line + 7, &id) < 0)
             {
-                print("Invalid id\n");
-                continue;
+                print("ERROR: Invalid task ID\n");
             }
-
-            if (sys_remove_task(id) < 0)
+            else if (peachos_todo_remove(id) < 0)
             {
-                print("Failed to remove task\n");
+                print("ERROR: Failed to remove task\n");
             }
             else
             {
                 print("Task removed\n");
             }
         }
-        else if (strncmp(args[0], "save", 4) == 0)
+        else if (strncmp(line, "exit", 4) == 0)
         {
-            if (argc < 3)
-            {
-                print("Usage: save <filename> <key>\n");
-                continue;
-            }
-
-            if (todo_cmd_save(args[1], args[2]) < 0)
-            {
-                print("Save failed\n");
-            }
-            else
-            {
-                print("Tasks saved\n");
-            }
-        }
-        else if (strncmp(args[0], "load", 4) == 0)
-        {
-            if (argc < 3)
-            {
-                print("Usage: load <filename> <key>\n");
-                continue;
-            }
-
-            if (todo_cmd_load(args[1], args[2]) < 0)
-            {
-                print("Load failed (wrong key or filename)\n");
-            }
-            else
-            {
-                print("Tasks loaded\n");
-            }
-        }
-        else if (strncmp(args[0], "exit", 4) == 0)
-        {
-            // Exit back to the OS after clean user feedback.
-            print("Exiting todo app\n");
+            print("Bye\n");
             peachos_exit();
             return 0;
         }
         else
         {
-            print("Unknown command. Type 'help'.\n");
+            print("Unknown command\n");
         }
     }
 

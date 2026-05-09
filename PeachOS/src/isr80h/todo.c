@@ -216,25 +216,58 @@ static int todo_find_slot_index(struct todo_catalog* catalog, const char* filena
     return -1;
 }
 
+
+
+static int todo_restore_from_plain(char* plain, unsigned int plain_len)
+{
+    struct todo_serial_header header;
+    memset(&header, 0, sizeof(header));
+    if ((int) sizeof(header) > (int) plain_len)
+    {
+        return -EINVARG;
+    }
+
+    memcpy(&header, plain, sizeof(header));
+    if (strncmp(header.magic, "TDODAT1", 7) != 0)
+    {
+        return -EINVARG;
+    }
+
+    memset(todo_tasks, 0, sizeof(todo_tasks));
+    todo_next_id = header.next_id;
+
+    int offset = sizeof(header);
+    for (int i = 0; i < header.task_count && i < TODO_MAX_TASKS; i++)
+    {
+        if (offset + (int) sizeof(struct todo_serial_entry) > (int) plain_len)
+        {
+            break;
+        }
+
+        struct todo_serial_entry entry;
+        memcpy(&entry, plain + offset, sizeof(entry));
+        offset += sizeof(entry);
+
+        todo_tasks[i].id = entry.id;
+        todo_tasks[i].active = 1;
+        todo_tasks[i].complete = entry.complete;
+        strncpy(todo_tasks[i].description, entry.description, sizeof(todo_tasks[i].description));
+    }
+
+    if (todo_next_id <= 0)
+    {
+        todo_next_id = 1;
+    }
+
+    return 0;
+}
+
 static int todo_save_to_disk(const char* filename, const char* key)
 {
     int key_len = strnlen(key, TODO_KEY_MAX);
     if (key_len <= 0)
     {
         return -EINVARG;
-    }
-
-    struct todo_catalog catalog;
-    int res = todo_catalog_load(&catalog);
-    if (res < 0)
-    {
-        return res;
-    }
-
-    int slot = todo_save_slot_index(&catalog, filename);
-    if (slot < 0)
-    {
-        return -ENOMEM;
     }
 
     char plain[TODO_SLOT_BYTES];
@@ -277,10 +310,23 @@ static int todo_save_to_disk(const char* filename, const char* key)
     memcpy(enc, plain, sizeof(plain));
     todo_xor_crypt(enc, offset, key, key_len);
 
+    struct todo_catalog catalog;
+    int res = todo_catalog_load(&catalog);
+    if (res < 0)
+    {
+        return res;  /* catalog load failed */
+    }
+
+    int slot = todo_save_slot_index(&catalog, filename);
+    if (slot < 0)
+    {
+        return -ENOMEM;  /* no save slots available */
+    }
+
     struct disk* disk = disk_get(0);
     if (!disk)
     {
-        return -EIO;
+        return -EINVARG;  /* disk not found */
     }
 
     unsigned int lba = TODO_DATA_BASE_LBA + (slot * TODO_SLOT_SECTORS);
@@ -289,7 +335,7 @@ static int todo_save_to_disk(const char* filename, const char* key)
         res = disk_write_block(disk, lba + i, 1, enc + (i * 512));
         if (res < 0)
         {
-            return res;
+            return res;  /* disk write failed */
         }
     }
 
@@ -297,7 +343,13 @@ static int todo_save_to_disk(const char* filename, const char* key)
     catalog.lengths[slot] = offset;
     strncpy(catalog.names[slot], filename, TODO_FILENAME_MAX);
 
-    return todo_catalog_save(&catalog);
+    res = todo_catalog_save(&catalog);
+    if (res < 0)
+    {
+        return res;  /* catalog save failed */
+    }
+
+    return 0;
 }
 
 static int todo_load_from_disk(const char* filename, const char* key)
@@ -308,88 +360,51 @@ static int todo_load_from_disk(const char* filename, const char* key)
         return -EINVARG;
     }
 
-    struct todo_catalog catalog;
-    int res = todo_catalog_load(&catalog);
-    if (res < 0)
-    {
-        return res;
-    }
-
-    int slot = todo_find_slot_index(&catalog, filename);
-    if (slot < 0)
-    {
-        return -EINVARG;
-    }
-
-    if (catalog.lengths[slot] <= 0 || catalog.lengths[slot] > TODO_SLOT_BYTES)
-    {
-        return -EINVARG;
-    }
-
     char enc[TODO_SLOT_BYTES];
     char plain[TODO_SLOT_BYTES];
     memset(enc, 0, sizeof(enc));
     memset(plain, 0, sizeof(plain));
 
-    struct disk* disk = disk_get(0);
-    if (!disk)
-    {
-        return -EIO;
-    }
+    unsigned int data_len = 0;
+    int res = 0;
 
-    unsigned int lba = TODO_DATA_BASE_LBA + (slot * TODO_SLOT_SECTORS);
-    for (int i = 0; i < TODO_SLOT_SECTORS; i++)
+    struct todo_catalog catalog;
+    res = todo_catalog_load(&catalog);
+    if (res >= 0)
     {
-        res = disk_read_block(disk, lba + i, 1, enc + (i * 512));
-        if (res < 0)
+        int slot = todo_find_slot_index(&catalog, filename);
+        if (slot >= 0 && catalog.lengths[slot] > 0 && catalog.lengths[slot] <= TODO_SLOT_BYTES)
         {
-            return res;
+            struct disk* disk = disk_get(0);
+            if (disk)
+            {
+                unsigned int lba = TODO_DATA_BASE_LBA + (slot * TODO_SLOT_SECTORS);
+                res = 0;
+                for (int i = 0; i < TODO_SLOT_SECTORS; i++)
+                {
+                    res = disk_read_block(disk, lba + i, 1, enc + (i * 512));
+                    if (res < 0)
+                    {
+                        break;
+                    }
+                }
+
+                if (res >= 0)
+                {
+                    data_len = catalog.lengths[slot];
+                    memcpy(plain, enc, sizeof(enc));
+                    todo_xor_crypt(plain, data_len, key, key_len);
+                    res = todo_restore_from_plain(plain, data_len);
+                    if (res >= 0)
+                    {
+                        return 0;
+                    }
+                }
+            }
         }
     }
 
-    memcpy(plain, enc, sizeof(enc));
-    todo_xor_crypt(plain, catalog.lengths[slot], key, key_len);
-
-    struct todo_serial_header header;
-    memset(&header, 0, sizeof(header));
-    if ((int) sizeof(header) > (int) catalog.lengths[slot])
-    {
-        return -EINVARG;
-    }
-
-    memcpy(&header, plain, sizeof(header));
-    if (strncmp(header.magic, "TDODAT1", 7) != 0)
-    {
-        return -EINVARG;
-    }
-
-    memset(todo_tasks, 0, sizeof(todo_tasks));
-    todo_next_id = header.next_id;
-
-    int offset = sizeof(header);
-    for (int i = 0; i < header.task_count && i < TODO_MAX_TASKS; i++)
-    {
-        if (offset + (int) sizeof(struct todo_serial_entry) > (int) catalog.lengths[slot])
-        {
-            break;
-        }
-
-        struct todo_serial_entry entry;
-        memcpy(&entry, plain + offset, sizeof(entry));
-        offset += sizeof(entry);
-
-        todo_tasks[i].id = entry.id;
-        todo_tasks[i].active = 1;
-        todo_tasks[i].complete = entry.complete;
-        strncpy(todo_tasks[i].description, entry.description, sizeof(todo_tasks[i].description));
-    }
-
-    if (todo_next_id <= 0)
-    {
-        todo_next_id = 1;
-    }
-
-    return 0;
+    return -EINVARG;  /* file not found on disk */
 }
 
 void* isr80h_command10_todo_add(struct interrupt_frame* frame)
