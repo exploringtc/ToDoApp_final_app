@@ -1,4 +1,24 @@
-todo on PeachOS
+macOS quick setup (same environment used for grading)
+
+This project is built and tested on macOS using Homebrew tools and QEMU.
+Apple Silicon is fine (QEMU emulates i386).
+
+dependencies
+
+Homebrew
+brew update
+brew install nasm mtools qemu i686-elf-binutils i686-elf-gcc
+
+make 
+nasm 
+mcopy - mtools command used to copy hello.txt and .elf programs into the disk image FAT region.
+mformat - mtools command that can initialize/format FAT on the image if host mtools requires it.
+Why needed: mcopy places user .elf files into the image so the shell can run them.
+Why mformat: some macOS setups (including ours) need FAT initialized first for mcopy to work.
+qemu-system-i386 - Emulator used to boot and run the 32-bit PeachOS image on macOS.
+i686-elf-gcc - Cross C compiler targeting i686-elf, required for freestanding kernel/user C code.
+i686-elf-ld - Cross linker used during final kernel linking stages.
+
 
 Little todo-list program we built so it runs on top of PeachOS as a normal
 user program (todo.elf), launched from the shell.
@@ -44,13 +64,14 @@ sudo apt install nasm mtools qemu-system-x86 build-essential
 
 
 running
+at the same directory level as PeachOS:
 
 qemu-system-i386 -hda /bin/os.bin
 
 
 Once it boots into the shell prompt, just type:
 
-todo.elf
+todo.elf (if nothing happens at first, just type it again.)
 
 and the app takes over. exit drops you back to the shell.
 
