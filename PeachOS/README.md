@@ -1,12 +1,11 @@
 todo on PeachOS
 
-Little todo-list program I built so it runs on top of PeachOS as a normal
+Little todo-list program we built so it runs on top of PeachOS as a normal
 user program (todo.elf), launched from the shell.
 
 It's nothing fancy: add stuff, list it, remove it, save/load to disk.
 The point of the project was less about the todo app itself and more
-about wiring up a user program end-to-end - syscalls, the int 0x80 path,
-disk read/write, and the FAT image build.
+about wiring up a user program end-to-end - syscalls, the int 0x80 path.
 
 commands inside the app
 
@@ -22,9 +21,9 @@ mid-session.
 
 There are also save/load syscalls wired up on the kernel side (with a
 little XOR-obfuscated on-disk format), but we kept them out of the
-interactive REPL on purpose - the in-class demo stays focused on the
-add/list/remove syscall path. See CHANGES_FROM_NIBBLEBITS.txt for the
-full story.
+interactive REPL on purpose. We ran into coding and implementation issues.
+Basically a skill issue. 
+
 
 building
 
