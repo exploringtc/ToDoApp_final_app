@@ -2,30 +2,16 @@
 #include "task/task.h"
 #include "string/string.h"
 #include "memory/memory.h"
-#include "disk/disk.h"
 #include "status.h"
 #include "kernel.h"
 
 #define TODO_MAX_TASKS 64
 #define TODO_DESC_MAX 64
-#define TODO_FILENAME_MAX 32
-#define TODO_KEY_MAX 64
-
-/* Raw-sector persistence: reserve 10 sectors at the end of the 16 MB disk
- * image (well beyond any FAT16 data region for this small filesystem). */
-#define TODO_SAVE_LBA     32760
-#define TODO_SAVE_SECTORS 10
-#define TODO_SAVE_MAGIC   0x544F444F   /* ASCII "TODO" */
-
-static char todo_save_buf[TODO_SAVE_SECTORS * 512];
-
-
 
 struct todo_task
 {
     int id;
     int active;
-    int complete;
     char description[TODO_DESC_MAX];
 };
 
@@ -133,7 +119,6 @@ void* isr80h_command10_todo_add(struct interrupt_frame* frame)
 
     todo_tasks[slot].id = todo_next_id++;
     todo_tasks[slot].active = 1;
-    todo_tasks[slot].complete = 0;
     strncpy(todo_tasks[slot].description, task_desc, sizeof(todo_tasks[slot].description));
 
     return (void*) todo_tasks[slot].id;
