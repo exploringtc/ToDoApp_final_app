@@ -51,6 +51,4 @@ void isr80h_register_commands()
     isr80h_register_command(SYSTEM_COMMAND10_TODO_ADD, isr80h_command10_todo_add);
     isr80h_register_command(SYSTEM_COMMAND11_TODO_LIST, isr80h_command11_todo_list);
     isr80h_register_command(SYSTEM_COMMAND12_TODO_REMOVE, isr80h_command12_todo_remove);
-    isr80h_register_command(SYSTEM_COMMAND13_TODO_SAVE, isr80h_command13_todo_save);
-    isr80h_register_command(SYSTEM_COMMAND14_TODO_LOAD, isr80h_command14_todo_load);
 }
