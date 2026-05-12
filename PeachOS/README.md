@@ -9,16 +9,35 @@ Homebrew
 brew update
 brew install nasm mtools qemu i686-elf-binutils i686-elf-gcc
 
-make 
-nasm 
-mcopy - mtools command used to copy hello.txt and .elf programs into the disk image FAT region.
-mformat - mtools command that can initialize/format FAT on the image if host mtools requires it.
-Why needed: mcopy places user .elf files into the image so the shell can run them.
-Why mformat: some macOS setups (including ours) need FAT initialized first for mcopy to work.
-qemu-system-i386 - Emulator used to boot and run the 32-bit PeachOS image on macOS.
-i686-elf-gcc - Cross C compiler targeting i686-elf, required for freestanding kernel/user C code.
-i686-elf-ld - Cross linker used during final kernel linking stages.
+tools:
+    make 
+    nasm 
+    mcopy
+    mformat
+    qemu-system-i386 
+    i686-elf-gcc 
+    i686-elf-ld 
 
+
+-----------------------------------------------------------------------------------------------------------
+Ubuntu 22.04 setup (if grading on Ubuntu)
+
+dependencies
+
+sudo apt update
+sudo apt install -y build-essential make nasm mtools qemu-system-x86
+
+If available in your apt sources, install prebuilt cross tools:
+sudo apt install -y gcc-i686-elf binutils-i686-elf || true
+
+Makefile changes for Ubuntu
+
+Required (keep these):
+     Keep ./build/isr80h/todo.o in FILES.
+     Keep the todo compile rule for ./src/isr80h/src_todo.c.
+     Keep todo in user_programs and user_programs_clean.
+
+-----------------------------------------------------------------------------------------------------------
 
 Little todo-list program we built so it runs on top of PeachOS as a normal
 user program (todo.elf), launched from the shell.
